@@ -10,7 +10,8 @@
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
   
-  <script src="https://cdn.jsdelivr.net/npm/mp4box@0.5.2/dist/mp4box.all.min.js"></script>
+  <!-- MP4Box.js yerine FFmpeg.wasm kütüphanesi -->
+  <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.7/dist/ffmpeg.min.js"></script>
 
   <style>
     * { box-sizing: border-box; }
@@ -198,7 +199,7 @@
     <p class="subtitle">Intro videonuzu ana videonun başına ekleyin</p>
 
     <div class="info-box">
-      💡 <strong>MP4Box.js</strong> kullanılarak profesyonel video birleştirme
+      💡 <strong>FFmpeg.wasm</strong> kullanılarak profesyonel video birleştirme
     </div>
 
     <div class="input-section">
@@ -221,23 +222,29 @@
     <div id="progress">
       <div class="step" data-step="0">
         <div class="step-icon">
+          <span class="material-symbols-outlined">cloud_download</span>
+        </div>
+        <span class="text">FFmpeg kütüphanesi yükleniyor...</span>
+      </div>
+      <div class="step" data-step="1">
+        <div class="step-icon">
           <span class="material-symbols-outlined">upload</span>
         </div>
         <span class="text">Intro videosu işleniyor...</span>
       </div>
-      <div class="step" data-step="1">
+      <div class="step" data-step="2">
         <div class="step-icon">
           <span class="material-symbols-outlined">download</span>
         </div>
         <span class="text">Ana video işleniyor...</span>
       </div>
-      <div class="step" data-step="2">
+      <div class="step" data-step="3">
         <div class="step-icon">
           <span class="material-symbols-outlined">merge</span>
         </div>
         <span class="text">Videolar birleştiriliyor...</span>
       </div>
-      <div class="step" data-step="3">
+      <div class="step" data-step="4">
         <div class="step-icon">
           <span class="material-symbols-outlined">download_done</span>
         </div>
@@ -249,6 +256,7 @@
   </div>
 
   <script>
+    const { FFmpeg } = FFmpegWASM; // FFmpeg.wasm kütüphanesini içeri aktar
     const introInput = document.getElementById('introFile');
     const mainInput = document.getElementById('mainFile');
     const urlInput = document.getElementById('videoUrl');
@@ -256,6 +264,8 @@
     const logEl = document.getElementById('log');
     const progressDiv = document.getElementById('progress');
     const steps = document.querySelectorAll('.step');
+
+    let ffmpeg = null; // FFmpeg instance'ı globalde tutulacak
 
     function log(msg) {
       console.log(msg);
@@ -278,13 +288,16 @@
         }
       });
       
+      // İlk adımların ikonlarını özel olarak resetle
+      if (index === 0) steps[0].querySelector('.step-icon .material-symbols-outlined').textContent = 'cloud_download';
+      if (index === 1) steps[1].querySelector('.step-icon .material-symbols-outlined').textContent = 'upload';
+      if (index === 2) steps[2].querySelector('.step-icon .material-symbols-outlined').textContent = 'download';
+      if (index === 3) steps[3].querySelector('.step-icon .material-symbols-outlined').textContent = 'merge';
+      if (index === 4) steps[4].querySelector('.step-icon .material-symbols-outlined').textContent = 'download_done';
+
+
       if (status === 'active') {
         step.classList.add('active');
-        const icon = step.querySelector('.step-icon .material-symbols-outlined');
-        if (index === 0) icon.textContent = 'upload';
-        if (index === 1) icon.textContent = 'download';
-        if (index === 2) icon.textContent = 'merge';
-        if (index === 3) icon.textContent = 'download_done';
       } else if (status === 'done') {
         step.classList.add('done');
         const icon = step.querySelector('.step-icon .material-symbols-outlined');
@@ -325,198 +338,75 @@
       return await response.arrayBuffer();
     }
 
-    async function parseAndCollectSamples(arrayBuffer, fileDescription = '') {
-      return new Promise((resolve, reject) => {
-        const mp4boxFile = MP4Box.createFile();
-        let collectedSamples = {};
-        let trackInfo = null;
-        let finishedTracks = new Set();
-        let totalTracks = 0;
+    async function initializeFFmpeg() {
+      if (ffmpeg) return; // Zaten yüklüyse tekrar yükleme
+      
+      updateStep(0, 'active');
+      log('FFmpeg kütüphanesi başlatılıyor...');
+      ffmpeg = new FFmpeg();
 
-        mp4boxFile.onReady = (info) => {
-          log(`${fileDescription} video bilgisi alındı: ${info.tracks.length} track, süre: ${(info.duration / info.timescale).toFixed(2)} saniye.`);
-          trackInfo = info;
-          totalTracks = info.tracks.length;
-
-          if (totalTracks === 0) {
-              reject(new Error(`${fileDescription} için track bulunamadı. Bozuk veya desteklenmeyen video olabilir.`));
-              return;
-          }
-
-          info.tracks.forEach(track => {
-            // Debugging için track özelliklerini logla
-            log(`DEBUG: ${fileDescription} Track ID: ${track.id}, track_type: ${track.track_type}, type: ${track.type}, Codec: ${track.codec}, Timescale: ${track.timescale}`);
-
-            mp4boxFile.setExtractionOptions(track.id, null, { nbSamples: Infinity });
-            collectedSamples[track.id] = [];
-          });
-          mp4boxFile.start();
-        };
-
-        mp4boxFile.onSamples = (track_id, user, samples) => {
-          if (!collectedSamples[track_id]) {
-            collectedSamples[track_id] = [];
-          }
-          collectedSamples[track_id] = collectedSamples[track_id].concat(samples);
-          
-          const track = trackInfo.tracks.find(t => t.id === track_id);
-          if (track && collectedSamples[track_id].length >= track.nb_samples) {
-            finishedTracks.add(track_id);
-            if (finishedTracks.size === totalTracks) {
-              log(`${fileDescription} için tüm örnekler toplandı.`);
-              resolve({ mp4boxFile, info: trackInfo, collectedSamples });
-            }
-          }
-        };
-
-        mp4boxFile.onError = (e) => {
-          reject(new Error(`${fileDescription} MP4 ayrıştırma hatası: ${e}`));
-        };
-
-        arrayBuffer.fileStart = 0;
-        mp4boxFile.appendBuffer(arrayBuffer);
-        mp4boxFile.flush();
+      // FFmpeg loglarını konsola aktar
+      ffmpeg.on('log', ({ message }) => log(`FFmpeg Log: ${message}`));
+      // FFmpeg progress'ini takip et (isteğe bağlı, daha detaylı bir ilerleme çubuğu için)
+      ffmpeg.on('progress', ({ progress, time }) => {
+        // Log elementine veya ayrı bir ilerleme çubuğuna yazabilirsiniz
+        // log(`FFmpeg İlerleme: %${(progress * 100).toFixed(0)}, Zaman: ${time}`);
       });
+
+      try {
+        await ffmpeg.load({
+          coreURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.7/dist/ffmpeg-core.js',
+          wasmURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.7/dist/ffmpeg-core.wasm',
+          workerURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.7/dist/ffmpeg-core.worker.js',
+        });
+        log('FFmpeg başarıyla yüklendi.');
+        updateStep(0, 'done');
+      } catch (error) {
+        log(`HATA: FFmpeg yüklenirken bir sorun oluştu: ${error.message}`);
+        updateStep(0, 'error');
+        throw error;
+      }
     }
 
-    async function mergeVideos(introBuffer, mainBuffer) {
-      log('MP4Box ile birleştirme başlıyor...');
+    async function mergeVideosFFmpeg(introBuffer, mainBuffer) {
+      log('FFmpeg ile videolar birleştiriliyor...');
       
-      const { info: introInfo, collectedSamples: introCollectedSamples } = await parseAndCollectSamples(introBuffer, 'Intro');
-      const { info: mainInfo, collectedSamples: mainCollectedSamples } = await parseAndCollectSamples(mainBuffer, 'Ana Video');
+      const introFileName = 'intro.mp4';
+      const mainFileName = 'main.mp4';
+      const outputFileName = 'birlesik_video.mp4';
+      const fileListFileName = 'filelist.txt';
 
-      log(`Intro süresi: ${(introInfo.duration / introInfo.timescale).toFixed(2)} saniye, Ana video süresi: ${(mainInfo.duration / mainInfo.timescale).toFixed(2)} saniye.`);
-      
-      const outputFile = MP4Box.createFile();
-      const outputTrackMap = new Map();
-      let anyTrackAdded = false; // En az bir track eklendi mi?
+      // FFmpeg sanal dosya sistemine dosyaları yaz
+      log(`Intro videosu (${introFileName}) FFmpeg FS'ye yazılıyor...`);
+      ffmpeg.writeFile(introFileName, new Uint8Array(introBuffer));
+      log(`Ana video (${mainFileName}) FFmpeg FS'ye yazılıyor...`);
+      ffmpeg.writeFile(mainFileName, new Uint8Array(mainBuffer));
 
-      introInfo.tracks.forEach(introTrack => {
-        // --- Önemli: track_type kontrolü önce yapılmalı ve geçerli bir tip olmalı ---
-        // MP4Box.js track nesnelerinde 'track_type' veya 'type' olabilir, ikisini de kontrol et
-        const trackType = introTrack.track_type || introTrack.type; 
+      // Birleştirme için dosya listesi oluştur
+      const fileListContent = `file '${introFileName}'\nfile '${mainFileName}'`;
+      log(`Birleştirme listesi (${fileListFileName}) FFmpeg FS'ye yazılıyor...`);
+      ffmpeg.writeFile(fileListFileName, new TextEncoder().encode(fileListContent));
 
-        if (!trackType || (trackType !== 'video' && trackType !== 'audio')) {
-            log(`HATA: Intro track (ID ${introTrack.id}) için geçerli bir track tipi ('video' veya 'audio') bulunamadı (Tespit edilen Tip: ${trackType}). Bu track atlanacak.`);
-            return; 
-        }
+      // FFmpeg komutunu çalıştır
+      // -f concat: concat demuxer kullan
+      // -safe 0: concat demuxer'ın göreli yolları (veya güvenli olmayan yolları) kabul etmesini sağlar
+      // -i filelist.txt: Giriş olarak dosya listesini kullan
+      // -c copy: Video ve ses akışlarını yeniden kodlamadan kopyala (hızlı ve kayıpsız)
+      // output.mp4: Çıktı dosyası adı
+      log('FFmpeg birleştirme komutu yürütülüyor...');
+      await ffmpeg.exec([
+        '-f', 'concat',
+        '-safe', '0',
+        '-i', fileListFileName,
+        '-c', 'copy',
+        outputFileName
+      ]);
+      log('FFmpeg birleştirme komutu tamamlandı.');
 
-        let description = null;
-        if (introTrack.mdia && 
-            introTrack.mdia.minf && 
-            introTrack.mdia.minf.stbl && 
-            introTrack.mdia.minf.stbl.stsd && 
-            introTrack.mdia.minf.stbl.stsd.entries && 
-            introTrack.mdia.minf.stbl.stsd.entries.length > 0) {
-          description = introTrack.mdia.minf.stbl.stsd.entries[0];
-        } else {
-          log(`UYARI: Intro track (ID ${introTrack.id}, Tip ${trackType}) için codec açıklaması (stsd entry) bulunamadı. Bu track atlanacak.`);
-          return;
-        }
-        
-        const newTrackOptions = {
-          type: trackType, // Geçerli trackType kullan
-          codec: introTrack.codec,
-          timescale: introTrack.timescale,
-          duration: 0,
-          description: description
-        };
-
-        if (introTrack.video) {
-          newTrackOptions.width = introTrack.video.width;
-          newTrackOptions.height = introTrack.video.height;
-        }
-        if (introTrack.audio) {
-          newTrackOptions.samplerate = introTrack.audio.sample_rate;
-          newTrackOptions.channel_count = introTrack.audio.channel_count;
-        }
-        if (introTrack.hdlr) {
-          newTrackOptions.hdlr = introTrack.hdlr;
-        }
-
-        const newTrackId = outputFile.addTrack(newTrackOptions);
-        
-        if (typeof newTrackId === 'number' && newTrackId > 0) {
-            outputTrackMap.set(introTrack.id, { outputTrackId: newTrackId, introDurationInOutputTimescale: 0 });
-            log(`Intro track (ID ${introTrack.id}, Tip ${trackType}) için yeni çıkış track'i oluşturuldu (Çıkış ID ${newTrackId}).`);
-            anyTrackAdded = true; // Başarılı bir track eklendi
-        } else {
-            log(`HATA: outputFile.addTrack intro track (ID ${introTrack.id}) için geçerli bir ID döndürmedi. Bu track atlanacak.`);
-        }
-      });
-
-      for (const introTrackIdStr in introCollectedSamples) {
-        const introTrackId = parseInt(introTrackIdStr);
-        if (!outputTrackMap.has(introTrackId)) {
-            continue;
-        }
-        const { outputTrackId } = outputTrackMap.get(introTrackId);
-        const samples = introCollectedSamples[introTrackId];
-        let currentTrackDuration = 0;
-
-        samples.forEach(sample => {
-          outputFile.addSample(outputTrackId, sample.data, {
-            dts: sample.dts,
-            cts: sample.cts,
-            is_sync: sample.is_sync,
-            duration: sample.duration,
-            is_leading: sample.is_leading,
-            is_depended_on: sample.is_depended_on,
-            has_redundancy: sample.has_redundancy,
-            degradation_priority: sample.degradation_priority,
-            depends_on: sample.depends_on
-          });
-          currentTrackDuration += sample.duration;
-        });
-        outputTrackMap.get(introTrackId).introDurationInOutputTimescale = currentTrackDuration;
-        log(`Çıkış track ${outputTrackId} için ${samples.length} intro örnek eklendi. Toplam süre: ${currentTrackDuration} birim.`);
-      }
-
-      mainInfo.tracks.forEach(mainTrack => {
-        // mainTrack.track_type veya mainTrack.type kontrolü
-        const mainTrackType = mainTrack.track_type || mainTrack.type;
-
-        const matchingIntroTrack = introInfo.tracks.find(it => 
-          (it.track_type === mainTrackType || it.type === mainTrackType) && // Hem intro hem main için type/track_type kontrolü
-          it.codec === mainTrack.codec &&
-          it.timescale === mainTrack.timescale
-        );
-
-        if (matchingIntroTrack && outputTrackMap.has(matchingIntroTrack.id)) {
-          const { outputTrackId, introDurationInOutputTimescale } = outputTrackMap.get(matchingIntroTrack.id);
-          const samples = mainCollectedSamples[mainTrack.id];
-
-          samples.forEach(sample => {
-            outputFile.addSample(outputTrackId, sample.data, {
-              dts: sample.dts + introDurationInOutputTimescale,
-              cts: sample.cts + introDurationInOutputTimescale,
-              is_sync: sample.is_sync,
-              duration: sample.duration,
-              is_leading: sample.is_leading,
-              is_depended_on: sample.is_depended_on,
-              has_redundancy: sample.has_redundancy,
-              degradation_priority: sample.degradation_priority,
-              depends_on: sample.depends_on
-            });
-          });
-          log(`Ana video track (ID ${mainTrack.id}, Tip ${mainTrackType}) örnekleri çıkış track ${outputTrackId}e ${introDurationInOutputTimescale} ofset ile eklendi.`);
-          anyTrackAdded = true; // Ana videodan da track eklendiğinde işaretle
-        } else {
-          log(`UYARI: Ana video track (ID ${mainTrack.id}, Tip ${mainTrackType}, Codec ${mainTrack.codec}, Timescale ${mainTrack.timescale}) için uyumlu intro track bulunamadı veya intro track işlenmedi. Bu track atlanacak.`);
-        }
-      });
-      
-      // Eğer hiçbir track eklenemediyse finalize etme
-      if (!anyTrackAdded) {
-          throw new Error('Birleştirilecek geçerli track bulunamadı. Yüklenen MP4 dosyaları bozuk olabilir veya MP4Box.js tarafından desteklenmiyor.');
-      }
-
-      outputFile.finalize();
-      log('MP4 dosyası birleştirme tamamlandı ve finalize edildi.');
-
-      const mergedBuffer = outputFile.write('arraybuffer', {});
-      log(`Birleştirilen dosya boyutu: ${(mergedBuffer.byteLength / 1024 / 1024).toFixed(2)} MB`);
-      return mergedBuffer;
+      // Çıktı dosyasını sanal dosya sisteminden oku
+      log(`Birleştirilmiş video (${outputFileName}) FFmpeg FS'den okunuyor...`);
+      const data = ffmpeg.readFile(outputFileName);
+      return data.buffer; // ArrayBuffer olarak döndür
     }
 
     runBtn.onclick = async () => {
@@ -530,24 +420,31 @@
       logEl.style.display = 'block';
       logEl.textContent = '';
       
-      steps.forEach((step, index) => {
+      steps.forEach((step, index) => { // Her yeni çalıştırmada ikonları sıfırla
         step.classList.remove('active', 'done', 'error');
         const icon = step.querySelector('.step-icon .material-symbols-outlined');
-        if (index === 0) icon.textContent = 'upload';
-        if (index === 1) icon.textContent = 'download';
-        if (index === 2) icon.textContent = 'merge';
-        if (index === 3) icon.textContent = 'download_done';
+        // İlk yükleme adımı için başlangıç ikonu
+        if (index === 0) icon.textContent = 'cloud_download';
+        else if (index === 1) icon.textContent = 'upload';
+        else if (index === 2) icon.textContent = 'download';
+        else if (index === 3) icon.textContent = 'merge';
+        else if (index === 4) icon.textContent = 'download_done';
       });
 
-
       try {
-        updateStep(0, 'active');
+        // Adım 0: FFmpeg kütüphanesini yükle/başlat
+        await initializeFFmpeg(); // FFmpeg sadece bir kez yüklenecek
+        updateStep(0, 'done'); // FFmpeg yüklendiyse adımı tamamla
+
+        // Adım 1: Intro oku
+        updateStep(1, 'active');
         log('Intro videosu okunuyor...');
         const introBuffer = await readFileAsArrayBuffer(introInput.files[0]);
         log(`Intro yüklendi: ${(introBuffer.byteLength / 1024 / 1024).toFixed(2)} MB`);
-        updateStep(0, 'done');
+        updateStep(1, 'done');
         
-        updateStep(1, 'active');
+        // Adım 2: Ana video oku
+        updateStep(2, 'active');
         let mainBuffer;
         if (mainInput.files[0]) {
           log('Ana video dosyadan okunuyor...');
@@ -557,14 +454,16 @@
           mainBuffer = await fetchVideoAsArrayBuffer(urlInput.value.trim());
         }
         log(`Ana video yüklendi: ${(mainBuffer.byteLength / 1024 / 1024).toFixed(2)} MB`);
-        updateStep(1, 'done');
-        
-        updateStep(2, 'active');
-        const mergedBuffer = await mergeVideos(introBuffer, mainBuffer);
-        log(`Toplam boyut: ${(mergedBuffer.byteLength / 1024 / 1024).toFixed(2)} MB`);
         updateStep(2, 'done');
         
+        // Adım 3: Birleştir (FFmpeg ile)
         updateStep(3, 'active');
+        const mergedBuffer = await mergeVideosFFmpeg(introBuffer, mainBuffer);
+        log(`Toplam boyut: ${(mergedBuffer.byteLength / 1024 / 1024).toFixed(2)} MB`);
+        updateStep(3, 'done');
+        
+        // Adım 4: İndir
+        updateStep(4, 'active');
         log('Video indiriliyor...');
         const blob = new Blob([mergedBuffer], { type: 'video/mp4' });
         const url = URL.createObjectURL(blob);
@@ -576,7 +475,7 @@
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
         log('İndirme başarılı!');
-        updateStep(3, 'done');
+        updateStep(4, 'done');
         
         alert('✅ Video başarıyla birleştirildi ve indirildi!');
         
