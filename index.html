@@ -267,10 +267,24 @@
       const step = steps[index];
       if (!step) return;
       
-      steps.forEach(s => s.classList.remove('active', 'done', 'error'));
+      steps.forEach((s, i) => {
+        if (i < index && !s.classList.contains('error')) {
+          s.classList.add('done');
+          s.classList.remove('active');
+          const icon = s.querySelector('.step-icon .material-symbols-outlined');
+          icon.textContent = 'check_circle';
+        } else {
+          s.classList.remove('active', 'done', 'error');
+        }
+      });
       
       if (status === 'active') {
         step.classList.add('active');
+        const icon = step.querySelector('.step-icon .material-symbols-outlined');
+        if (index === 0) icon.textContent = 'upload';
+        if (index === 1) icon.textContent = 'download';
+        if (index === 2) icon.textContent = 'merge';
+        if (index === 3) icon.textContent = 'download_done';
       } else if (status === 'done') {
         step.classList.add('done');
         const icon = step.querySelector('.step-icon .material-symbols-outlined');
@@ -281,6 +295,20 @@
         icon.textContent = 'error';
       }
     }
+
+    function checkInputsAndToggleRunButton() {
+      const hasIntroFile = introInput.files.length > 0;
+      const hasMainFile = mainInput.files.length > 0;
+      const hasVideoUrl = urlInput.value.trim() !== '';
+
+      runBtn.disabled = !(hasIntroFile && (hasMainFile || hasVideoUrl));
+    }
+
+    checkInputsAndToggleRunButton();
+    introInput.onchange = checkInputsAndToggleRunButton;
+    mainInput.onchange = checkInputsAndToggleRunButton;
+    urlInput.oninput = checkInputsAndToggleRunButton;
+
 
     async function readFileAsArrayBuffer(file) {
       return new Promise((resolve, reject) => {
@@ -293,24 +321,58 @@
 
     async function fetchVideoAsArrayBuffer(url) {
       const response = await fetch(url);
-      if (!response.ok) throw new Error('Video indirilemedi');
+      if (!response.ok) throw new Error('Video indirilemedi: ' + response.statusText);
       return await response.arrayBuffer();
     }
 
-    function parseMP4(arrayBuffer) {
+    async function parseAndCollectSamples(arrayBuffer, fileDescription = '') {
       return new Promise((resolve, reject) => {
         const mp4boxFile = MP4Box.createFile();
-        let tracks = [];
-        
+        let collectedSamples = {};
+        let trackInfo = null;
+        let finishedTracks = new Set();
+        let totalTracks = 0;
+
         mp4boxFile.onReady = (info) => {
-          log(`Video bilgisi alındı: ${info.tracks.length} track`);
-          resolve({ mp4boxFile, info });
+          log(`${fileDescription} video bilgisi alındı: ${info.tracks.length} track, süre: ${(info.duration / info.timescale).toFixed(2)} saniye.`);
+          trackInfo = info;
+          totalTracks = info.tracks.length;
+
+          if (totalTracks === 0) {
+              reject(new Error(`${fileDescription} için track bulunamadı. Bozuk veya desteklenmeyen video olabilir.`));
+              return;
+          }
+
+          info.tracks.forEach(track => {
+            // Debugging için track özelliklerini logla
+            log(`DEBUG: ${fileDescription} Track ID: ${track.id}, track_type: ${track.track_type}, type: ${track.type}, Codec: ${track.codec}, Timescale: ${track.timescale}`);
+
+            mp4boxFile.setExtractionOptions(track.id, null, { nbSamples: Infinity });
+            collectedSamples[track.id] = [];
+          });
+          mp4boxFile.start();
         };
-        
+
+        mp4boxFile.onSamples = (track_id, user, samples) => {
+          if (!collectedSamples[track_id]) {
+            collectedSamples[track_id] = [];
+          }
+          collectedSamples[track_id] = collectedSamples[track_id].concat(samples);
+          
+          const track = trackInfo.tracks.find(t => t.id === track_id);
+          if (track && collectedSamples[track_id].length >= track.nb_samples) {
+            finishedTracks.add(track_id);
+            if (finishedTracks.size === totalTracks) {
+              log(`${fileDescription} için tüm örnekler toplandı.`);
+              resolve({ mp4boxFile, info: trackInfo, collectedSamples });
+            }
+          }
+        };
+
         mp4boxFile.onError = (e) => {
-          reject(new Error('MP4 parse hatası: ' + e));
+          reject(new Error(`${fileDescription} MP4 ayrıştırma hatası: ${e}`));
         };
-        
+
         arrayBuffer.fileStart = 0;
         mp4boxFile.appendBuffer(arrayBuffer);
         mp4boxFile.flush();
@@ -320,67 +382,171 @@
     async function mergeVideos(introBuffer, mainBuffer) {
       log('MP4Box ile birleştirme başlıyor...');
       
-      // Yeni MP4 dosyası oluştur
+      const { info: introInfo, collectedSamples: introCollectedSamples } = await parseAndCollectSamples(introBuffer, 'Intro');
+      const { info: mainInfo, collectedSamples: mainCollectedSamples } = await parseAndCollectSamples(mainBuffer, 'Ana Video');
+
+      log(`Intro süresi: ${(introInfo.duration / introInfo.timescale).toFixed(2)} saniye, Ana video süresi: ${(mainInfo.duration / mainInfo.timescale).toFixed(2)} saniye.`);
+      
       const outputFile = MP4Box.createFile();
-      
-      // Intro'yu parse et
-      const intro = await parseMP4(introBuffer);
-      log(`Intro: ${intro.info.duration / intro.info.timescale} saniye`);
-      
-      // Ana videoyu parse et
-      const main = await parseMP4(mainBuffer);
-      log(`Ana video: ${main.info.duration / main.info.timescale} saniye`);
-      
-      // Track'leri birleştir
-      const allSamples = [];
-      
-      // Intro'nun sample'larını al
-      for (let track of intro.info.tracks) {
-        intro.mp4boxFile.setExtractionOptions(track.id, null, { nbSamples: 1000000 });
+      const outputTrackMap = new Map();
+      let anyTrackAdded = false; // En az bir track eklendi mi?
+
+      introInfo.tracks.forEach(introTrack => {
+        // --- Önemli: track_type kontrolü önce yapılmalı ve geçerli bir tip olmalı ---
+        // MP4Box.js track nesnelerinde 'track_type' veya 'type' olabilir, ikisini de kontrol et
+        const trackType = introTrack.track_type || introTrack.type; 
+
+        if (!trackType || (trackType !== 'video' && trackType !== 'audio')) {
+            log(`HATA: Intro track (ID ${introTrack.id}) için geçerli bir track tipi ('video' veya 'audio') bulunamadı (Tespit edilen Tip: ${trackType}). Bu track atlanacak.`);
+            return; 
+        }
+
+        let description = null;
+        if (introTrack.mdia && 
+            introTrack.mdia.minf && 
+            introTrack.mdia.minf.stbl && 
+            introTrack.mdia.minf.stbl.stsd && 
+            introTrack.mdia.minf.stbl.stsd.entries && 
+            introTrack.mdia.minf.stbl.stsd.entries.length > 0) {
+          description = introTrack.mdia.minf.stbl.stsd.entries[0];
+        } else {
+          log(`UYARI: Intro track (ID ${introTrack.id}, Tip ${trackType}) için codec açıklaması (stsd entry) bulunamadı. Bu track atlanacak.`);
+          return;
+        }
+        
+        const newTrackOptions = {
+          type: trackType, // Geçerli trackType kullan
+          codec: introTrack.codec,
+          timescale: introTrack.timescale,
+          duration: 0,
+          description: description
+        };
+
+        if (introTrack.video) {
+          newTrackOptions.width = introTrack.video.width;
+          newTrackOptions.height = introTrack.video.height;
+        }
+        if (introTrack.audio) {
+          newTrackOptions.samplerate = introTrack.audio.sample_rate;
+          newTrackOptions.channel_count = introTrack.audio.channel_count;
+        }
+        if (introTrack.hdlr) {
+          newTrackOptions.hdlr = introTrack.hdlr;
+        }
+
+        const newTrackId = outputFile.addTrack(newTrackOptions);
+        
+        if (typeof newTrackId === 'number' && newTrackId > 0) {
+            outputTrackMap.set(introTrack.id, { outputTrackId: newTrackId, introDurationInOutputTimescale: 0 });
+            log(`Intro track (ID ${introTrack.id}, Tip ${trackType}) için yeni çıkış track'i oluşturuldu (Çıkış ID ${newTrackId}).`);
+            anyTrackAdded = true; // Başarılı bir track eklendi
+        } else {
+            log(`HATA: outputFile.addTrack intro track (ID ${introTrack.id}) için geçerli bir ID döndürmedi. Bu track atlanacak.`);
+        }
+      });
+
+      for (const introTrackIdStr in introCollectedSamples) {
+        const introTrackId = parseInt(introTrackIdStr);
+        if (!outputTrackMap.has(introTrackId)) {
+            continue;
+        }
+        const { outputTrackId } = outputTrackMap.get(introTrackId);
+        const samples = introCollectedSamples[introTrackId];
+        let currentTrackDuration = 0;
+
+        samples.forEach(sample => {
+          outputFile.addSample(outputTrackId, sample.data, {
+            dts: sample.dts,
+            cts: sample.cts,
+            is_sync: sample.is_sync,
+            duration: sample.duration,
+            is_leading: sample.is_leading,
+            is_depended_on: sample.is_depended_on,
+            has_redundancy: sample.has_redundancy,
+            degradation_priority: sample.degradation_priority,
+            depends_on: sample.depends_on
+          });
+          currentTrackDuration += sample.duration;
+        });
+        outputTrackMap.get(introTrackId).introDurationInOutputTimescale = currentTrackDuration;
+        log(`Çıkış track ${outputTrackId} için ${samples.length} intro örnek eklendi. Toplam süre: ${currentTrackDuration} birim.`);
       }
+
+      mainInfo.tracks.forEach(mainTrack => {
+        // mainTrack.track_type veya mainTrack.type kontrolü
+        const mainTrackType = mainTrack.track_type || mainTrack.type;
+
+        const matchingIntroTrack = introInfo.tracks.find(it => 
+          (it.track_type === mainTrackType || it.type === mainTrackType) && // Hem intro hem main için type/track_type kontrolü
+          it.codec === mainTrack.codec &&
+          it.timescale === mainTrack.timescale
+        );
+
+        if (matchingIntroTrack && outputTrackMap.has(matchingIntroTrack.id)) {
+          const { outputTrackId, introDurationInOutputTimescale } = outputTrackMap.get(matchingIntroTrack.id);
+          const samples = mainCollectedSamples[mainTrack.id];
+
+          samples.forEach(sample => {
+            outputFile.addSample(outputTrackId, sample.data, {
+              dts: sample.dts + introDurationInOutputTimescale,
+              cts: sample.cts + introDurationInOutputTimescale,
+              is_sync: sample.is_sync,
+              duration: sample.duration,
+              is_leading: sample.is_leading,
+              is_depended_on: sample.is_depended_on,
+              has_redundancy: sample.has_redundancy,
+              degradation_priority: sample.degradation_priority,
+              depends_on: sample.depends_on
+            });
+          });
+          log(`Ana video track (ID ${mainTrack.id}, Tip ${mainTrackType}) örnekleri çıkış track ${outputTrackId}e ${introDurationInOutputTimescale} ofset ile eklendi.`);
+          anyTrackAdded = true; // Ana videodan da track eklendiğinde işaretle
+        } else {
+          log(`UYARI: Ana video track (ID ${mainTrack.id}, Tip ${mainTrackType}, Codec ${mainTrack.codec}, Timescale ${mainTrack.timescale}) için uyumlu intro track bulunamadı veya intro track işlenmedi. Bu track atlanacak.`);
+        }
+      });
       
-      // Ana videonun sample'larını al
-      for (let track of main.info.tracks) {
-        main.mp4boxFile.setExtractionOptions(track.id, null, { nbSamples: 1000000 });
+      // Eğer hiçbir track eklenemediyse finalize etme
+      if (!anyTrackAdded) {
+          throw new Error('Birleştirilecek geçerli track bulunamadı. Yüklenen MP4 dosyaları bozuk olabilir veya MP4Box.js tarafından desteklenmiyor.');
       }
-      
-      // Basit birleştirme: İki buffer'ı birleştir
-      const totalSize = introBuffer.byteLength + mainBuffer.byteLength;
-      const merged = new Uint8Array(totalSize);
-      merged.set(new Uint8Array(introBuffer), 0);
-      merged.set(new Uint8Array(mainBuffer), introBuffer.byteLength);
-      
-      log('Birleştirme tamamlandı');
-      return merged.buffer;
+
+      outputFile.finalize();
+      log('MP4 dosyası birleştirme tamamlandı ve finalize edildi.');
+
+      const mergedBuffer = outputFile.write('arraybuffer', {});
+      log(`Birleştirilen dosya boyutu: ${(mergedBuffer.byteLength / 1024 / 1024).toFixed(2)} MB`);
+      return mergedBuffer;
     }
 
     runBtn.onclick = async () => {
-      // Kontroller
-      if (!introInput.files[0]) {
-        alert('Lütfen bir intro videosu seçin!');
-        return;
-      }
-      
-      if (!mainInput.files[0] && !urlInput.value.trim()) {
-        alert('Lütfen bir ana video dosyası seçin veya link girin!');
+      if (runBtn.disabled) {
+        alert('Lütfen hem intro videosu hem de ana video (dosya veya link) seçin.');
         return;
       }
 
-      // Başlat
       runBtn.disabled = true;
       progressDiv.style.display = 'block';
       logEl.style.display = 'block';
       logEl.textContent = '';
+      
+      steps.forEach((step, index) => {
+        step.classList.remove('active', 'done', 'error');
+        const icon = step.querySelector('.step-icon .material-symbols-outlined');
+        if (index === 0) icon.textContent = 'upload';
+        if (index === 1) icon.textContent = 'download';
+        if (index === 2) icon.textContent = 'merge';
+        if (index === 3) icon.textContent = 'download_done';
+      });
+
 
       try {
-        // Adım 0: Intro oku
         updateStep(0, 'active');
         log('Intro videosu okunuyor...');
         const introBuffer = await readFileAsArrayBuffer(introInput.files[0]);
         log(`Intro yüklendi: ${(introBuffer.byteLength / 1024 / 1024).toFixed(2)} MB`);
         updateStep(0, 'done');
         
-        // Adım 1: Ana video oku
         updateStep(1, 'active');
         let mainBuffer;
         if (mainInput.files[0]) {
@@ -393,13 +559,11 @@
         log(`Ana video yüklendi: ${(mainBuffer.byteLength / 1024 / 1024).toFixed(2)} MB`);
         updateStep(1, 'done');
         
-        // Adım 2: Birleştir
         updateStep(2, 'active');
         const mergedBuffer = await mergeVideos(introBuffer, mainBuffer);
         log(`Toplam boyut: ${(mergedBuffer.byteLength / 1024 / 1024).toFixed(2)} MB`);
         updateStep(2, 'done');
         
-        // Adım 3: İndir
         updateStep(3, 'active');
         log('Video indiriliyor...');
         const blob = new Blob([mergedBuffer], { type: 'video/mp4' });
@@ -424,6 +588,7 @@
         alert('❌ Bir hata oluştu: ' + error.message);
       } finally {
         runBtn.disabled = false;
+        checkInputsAndToggleRunButton();
       }
     };
   </script>
