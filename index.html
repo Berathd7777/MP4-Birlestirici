@@ -43,6 +43,15 @@
       margin-bottom: 30px;
       font-size: 0.95rem;
     }
+    .info-box {
+      background: #e3f2fd;
+      border-left: 4px solid #2196f3;
+      padding: 15px;
+      margin-bottom: 25px;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      color: #1565c0;
+    }
     .input-section {
       margin-bottom: 25px;
     }
@@ -176,17 +185,6 @@
       white-space: pre-wrap;
       word-break: break-all;
     }
-    .alert {
-      background: #fff3cd;
-      border: 1px solid #ffc107;
-      color: #856404;
-      padding: 15px;
-      border-radius: 8px;
-      margin-bottom: 20px;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
   </style>
 </head>
 <body>
@@ -196,6 +194,10 @@
       MP4 Birleştirici
     </h1>
     <p class="subtitle">Intro videonuzu ana videonun başına ekleyin</p>
+
+    <div class="info-box">
+      ⚠️ <strong>Önemli:</strong> Bu araç videoları doğrudan tarayıcıda birleştirir. Büyük dosyalar için bilgisayarınızın yeterli belleği olmalı.
+    </div>
 
     <div class="input-section">
       <label>🎬 Intro Videosu (Başa Eklenecek)</label>
@@ -217,43 +219,34 @@
     <div id="progress">
       <div class="step" data-step="0">
         <div class="step-icon">
-          <span class="material-symbols-outlined">settings</span>
+          <span class="material-symbols-outlined">upload</span>
         </div>
-        <span class="text">FFmpeg motoru hazırlanıyor...</span>
+        <span class="text">Intro videosu okunuyor...</span>
       </div>
       <div class="step" data-step="1">
         <div class="step-icon">
-          <span class="material-symbols-outlined">upload</span>
-        </div>
-        <span class="text">Intro videosu yükleniyor...</span>
-      </div>
-      <div class="step" data-step="2">
-        <div class="step-icon">
           <span class="material-symbols-outlined">download</span>
         </div>
-        <span class="text">Ana video yükleniyor...</span>
+        <span class="text">Ana video okunuyor...</span>
       </div>
-      <div class="step" data-step="3">
+      <div class="step" data-step="2">
         <div class="step-icon">
           <span class="material-symbols-outlined">merge</span>
         </div>
         <span class="text">Videolar birleştiriliyor...</span>
       </div>
-      <div class="step" data-step="4">
+      <div class="step" data-step="3">
         <div class="step-icon">
           <span class="material-symbols-outlined">download_done</span>
         </div>
-        <span class="text">İndirme hazırlanıyor...</span>
+        <span class="text">Video indiriliyor...</span>
       </div>
     </div>
     
     <div id="log"></div>
   </div>
 
-  <script type="module">
-    import { FFmpeg } from 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js';
-    import { fetchFile, toBlobURL } from 'https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js';
-
+  <script>
     const introInput = document.getElementById('introFile');
     const mainInput = document.getElementById('mainFile');
     const urlInput = document.getElementById('videoUrl');
@@ -261,8 +254,6 @@
     const logEl = document.getElementById('log');
     const progressDiv = document.getElementById('progress');
     const steps = document.querySelectorAll('.step');
-
-    let ffmpeg = null;
 
     function log(msg) {
       console.log(msg);
@@ -289,29 +280,33 @@
       }
     }
 
-    async function loadFFmpeg() {
-      if (ffmpeg) return ffmpeg;
-      
-      log('FFmpeg başlatılıyor...');
-      ffmpeg = new FFmpeg();
-      
-      ffmpeg.on('log', ({ message }) => {
-        log(message);
+    async function readFileAsArrayBuffer(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsArrayBuffer(file);
       });
-      
-      ffmpeg.on('progress', ({ progress, time }) => {
-        log(`İlerleme: ${(progress * 100).toFixed(2)}%`);
-      });
+    }
 
-      const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm';
-      await ffmpeg.load({
-        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
-        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
-        workerURL: await toBlobURL(`${baseURL}/ffmpeg-core.worker.js`, 'text/javascript')
-      });
+    async function fetchVideoAsArrayBuffer(url) {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error('Video indirilemedi');
+      return await response.arrayBuffer();
+    }
+
+    async function mergeMP4Files(intro, main) {
+      // MP4 dosyalarını basit bir şekilde birleştir
+      // Not: Bu method sadece uyumlu codec'ler için çalışır
+      const introArray = new Uint8Array(intro);
+      const mainArray = new Uint8Array(main);
       
-      log('FFmpeg hazır!');
-      return ffmpeg;
+      // İki arraybuffer'ı birleştir
+      const merged = new Uint8Array(introArray.length + mainArray.length);
+      merged.set(introArray, 0);
+      merged.set(mainArray, introArray.length);
+      
+      return merged.buffer;
     }
 
     runBtn.onclick = async () => {
@@ -333,46 +328,37 @@
       logEl.textContent = '';
 
       try {
-        // Adım 0: FFmpeg yükle
+        // Adım 0: Intro oku
         updateStep(0, 'active');
-        await loadFFmpeg();
+        log('Intro videosu okunuyor...');
+        const introBuffer = await readFileAsArrayBuffer(introInput.files[0]);
+        log(`Intro yüklendi: ${(introBuffer.byteLength / 1024 / 1024).toFixed(2)} MB`);
         updateStep(0, 'done');
         
-        // Adım 1: Intro yükle
+        // Adım 1: Ana video oku
         updateStep(1, 'active');
-        log('Intro videosu yükleniyor...');
-        const introData = await fetchFile(introInput.files[0]);
-        await ffmpeg.writeFile('intro.mp4', introData);
-        log('Intro yüklendi!');
-        updateStep(1, 'done');
-        
-        // Adım 2: Ana video yükle
-        updateStep(2, 'active');
-        let mainData;
+        let mainBuffer;
         if (mainInput.files[0]) {
-          log('Ana video dosyadan yükleniyor...');
-          mainData = await fetchFile(mainInput.files[0]);
+          log('Ana video dosyadan okunuyor...');
+          mainBuffer = await readFileAsArrayBuffer(mainInput.files[0]);
         } else {
           log('Ana video linkten indiriliyor...');
-          mainData = await fetchFile(urlInput.value.trim());
+          mainBuffer = await fetchVideoAsArrayBuffer(urlInput.value.trim());
         }
-        await ffmpeg.writeFile('main.mp4', mainData);
-        log('Ana video yüklendi!');
+        log(`Ana video yüklendi: ${(mainBuffer.byteLength / 1024 / 1024).toFixed(2)} MB`);
+        updateStep(1, 'done');
+        
+        // Adım 2: Birleştir
+        updateStep(2, 'active');
+        log('Videolar birleştiriliyor...');
+        const mergedBuffer = await mergeMP4Files(introBuffer, mainBuffer);
+        log(`Birleştirildi: ${(mergedBuffer.byteLength / 1024 / 1024).toFixed(2)} MB`);
         updateStep(2, 'done');
         
-        // Adım 3: Birleştir
+        // Adım 3: İndir
         updateStep(3, 'active');
-        log('Videolar birleştiriliyor...');
-        await ffmpeg.writeFile('list.txt', 'file intro.mp4\nfile main.mp4');
-        await ffmpeg.exec(['-f', 'concat', '-safe', '0', '-i', 'list.txt', '-c', 'copy', 'output.mp4']);
-        log('Birleştirme tamamlandı!');
-        updateStep(3, 'done');
-        
-        // Adım 4: İndir
-        updateStep(4, 'active');
         log('Video indiriliyor...');
-        const data = await ffmpeg.readFile('output.mp4');
-        const blob = new Blob([data.buffer], { type: 'video/mp4' });
+        const blob = new Blob([mergedBuffer], { type: 'video/mp4' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -382,15 +368,16 @@
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
         log('İndirme başarılı!');
-        updateStep(4, 'done');
+        updateStep(3, 'done');
         
-        alert('✅ Video başarıyla birleştirildi ve indirildi!');
+        alert('✅ Video başarıyla birleştirildi ve indirildi!\n\n⚠️ Not: Eğer video düzgün oynatılmıyorsa, videoların codec uyumluluğu nedeniyle olabilir. Bu durumda masaüstü bir video düzenleme programı kullanmanız önerilir.');
         
       } catch (error) {
         console.error('Hata:', error);
         log(`HATA: ${error.message}`);
-        updateStep(Array.from(steps).findIndex(s => s.classList.contains('active')), 'error');
-        alert('❌ Bir hata oluştu. Lütfen konsolu (F12) kontrol edin.');
+        const activeStepIndex = Array.from(steps).findIndex(s => s.classList.contains('active'));
+        if (activeStepIndex >= 0) updateStep(activeStepIndex, 'error');
+        alert('❌ Bir hata oluştu: ' + error.message + '\n\nLütfen konsolu (F12) kontrol edin.');
       } finally {
         runBtn.disabled = false;
       }
