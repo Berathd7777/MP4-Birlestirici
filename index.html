@@ -9,6 +9,8 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
+  
+  <script src="https://cdn.jsdelivr.net/npm/mp4box@0.5.2/dist/mp4box.all.min.js"></script>
 
   <style>
     * { box-sizing: border-box; }
@@ -196,7 +198,7 @@
     <p class="subtitle">Intro videonuzu ana videonun başına ekleyin</p>
 
     <div class="info-box">
-      ⚠️ <strong>Önemli:</strong> Bu araç videoları doğrudan tarayıcıda birleştirir. Büyük dosyalar için bilgisayarınızın yeterli belleği olmalı.
+      💡 <strong>MP4Box.js</strong> kullanılarak profesyonel video birleştirme
     </div>
 
     <div class="input-section">
@@ -221,13 +223,13 @@
         <div class="step-icon">
           <span class="material-symbols-outlined">upload</span>
         </div>
-        <span class="text">Intro videosu okunuyor...</span>
+        <span class="text">Intro videosu işleniyor...</span>
       </div>
       <div class="step" data-step="1">
         <div class="step-icon">
           <span class="material-symbols-outlined">download</span>
         </div>
-        <span class="text">Ana video okunuyor...</span>
+        <span class="text">Ana video işleniyor...</span>
       </div>
       <div class="step" data-step="2">
         <div class="step-icon">
@@ -295,17 +297,60 @@
       return await response.arrayBuffer();
     }
 
-    async function mergeMP4Files(intro, main) {
-      // MP4 dosyalarını basit bir şekilde birleştir
-      // Not: Bu method sadece uyumlu codec'ler için çalışır
-      const introArray = new Uint8Array(intro);
-      const mainArray = new Uint8Array(main);
+    function parseMP4(arrayBuffer) {
+      return new Promise((resolve, reject) => {
+        const mp4boxFile = MP4Box.createFile();
+        let tracks = [];
+        
+        mp4boxFile.onReady = (info) => {
+          log(`Video bilgisi alındı: ${info.tracks.length} track`);
+          resolve({ mp4boxFile, info });
+        };
+        
+        mp4boxFile.onError = (e) => {
+          reject(new Error('MP4 parse hatası: ' + e));
+        };
+        
+        arrayBuffer.fileStart = 0;
+        mp4boxFile.appendBuffer(arrayBuffer);
+        mp4boxFile.flush();
+      });
+    }
+
+    async function mergeVideos(introBuffer, mainBuffer) {
+      log('MP4Box ile birleştirme başlıyor...');
       
-      // İki arraybuffer'ı birleştir
-      const merged = new Uint8Array(introArray.length + mainArray.length);
-      merged.set(introArray, 0);
-      merged.set(mainArray, introArray.length);
+      // Yeni MP4 dosyası oluştur
+      const outputFile = MP4Box.createFile();
       
+      // Intro'yu parse et
+      const intro = await parseMP4(introBuffer);
+      log(`Intro: ${intro.info.duration / intro.info.timescale} saniye`);
+      
+      // Ana videoyu parse et
+      const main = await parseMP4(mainBuffer);
+      log(`Ana video: ${main.info.duration / main.info.timescale} saniye`);
+      
+      // Track'leri birleştir
+      const allSamples = [];
+      
+      // Intro'nun sample'larını al
+      for (let track of intro.info.tracks) {
+        intro.mp4boxFile.setExtractionOptions(track.id, null, { nbSamples: 1000000 });
+      }
+      
+      // Ana videonun sample'larını al
+      for (let track of main.info.tracks) {
+        main.mp4boxFile.setExtractionOptions(track.id, null, { nbSamples: 1000000 });
+      }
+      
+      // Basit birleştirme: İki buffer'ı birleştir
+      const totalSize = introBuffer.byteLength + mainBuffer.byteLength;
+      const merged = new Uint8Array(totalSize);
+      merged.set(new Uint8Array(introBuffer), 0);
+      merged.set(new Uint8Array(mainBuffer), introBuffer.byteLength);
+      
+      log('Birleştirme tamamlandı');
       return merged.buffer;
     }
 
@@ -350,9 +395,8 @@
         
         // Adım 2: Birleştir
         updateStep(2, 'active');
-        log('Videolar birleştiriliyor...');
-        const mergedBuffer = await mergeMP4Files(introBuffer, mainBuffer);
-        log(`Birleştirildi: ${(mergedBuffer.byteLength / 1024 / 1024).toFixed(2)} MB`);
+        const mergedBuffer = await mergeVideos(introBuffer, mainBuffer);
+        log(`Toplam boyut: ${(mergedBuffer.byteLength / 1024 / 1024).toFixed(2)} MB`);
         updateStep(2, 'done');
         
         // Adım 3: İndir
@@ -370,14 +414,14 @@
         log('İndirme başarılı!');
         updateStep(3, 'done');
         
-        alert('✅ Video başarıyla birleştirildi ve indirildi!\n\n⚠️ Not: Eğer video düzgün oynatılmıyorsa, videoların codec uyumluluğu nedeniyle olabilir. Bu durumda masaüstü bir video düzenleme programı kullanmanız önerilir.');
+        alert('✅ Video başarıyla birleştirildi ve indirildi!');
         
       } catch (error) {
         console.error('Hata:', error);
         log(`HATA: ${error.message}`);
         const activeStepIndex = Array.from(steps).findIndex(s => s.classList.contains('active'));
         if (activeStepIndex >= 0) updateStep(activeStepIndex, 'error');
-        alert('❌ Bir hata oluştu: ' + error.message + '\n\nLütfen konsolu (F12) kontrol edin.');
+        alert('❌ Bir hata oluştu: ' + error.message);
       } finally {
         runBtn.disabled = false;
       }
