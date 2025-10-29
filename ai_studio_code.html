@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <title>🎥 MP4 Videoları Birleştirici — Gelişmiş Sürüm</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  
+  <!-- Google Fonts & Icons -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto+Flex:opsz,wght@8..144,400;8..144,600;8..144,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
+
+  <!-- Material Design 3 Web Components -->
+  <script type="module" src="https://esm.run/@material/web/all.js"></script>
+
+  <style>
+    :root {
+      --md-sys-color-primary: #0b74de;
+      --md-sys-color-surface-container: #ffffff;
+      --md-sys-color-on-surface: #1b1b1b;
+      --md-sys-color-outline: #ccc;
+      --md-ref-typeface-brand: 'Roboto Flex', sans-serif;
+      --md-ref-typeface-plain: 'Roboto Flex', sans-serif;
+      --success-color: #1e8e3e;
+      --error-color: #d93025;
+      --warning-color: #f9ab00;
+    }
+    body {
+      font-family: "Roboto Flex", "Segoe UI", sans-serif;
+      background: #f0f4f9;
+      display: grid;
+      place-items: center;
+      min-height: 100vh;
+      margin: 0;
+      padding: 20px;
+      box-sizing: border-box;
+    }
+    .card {
+      background: var(--md-sys-color-surface-container);
+      border-radius: 16px;
+      padding: 24px;
+      max-width: 600px;
+      width: 100%;
+      box-shadow: 0 4px 8px 3px rgba(0,0,0,.15), 0 1px 3px rgba(0,0,0,.3);
+    }
+    h1 {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: var(--md-sys-color-primary);
+      font-size: 1.8rem;
+      margin-top: 0;
+    }
+    h1 .material-symbols-outlined { font-size: 2.5rem; }
+    .description {
+      background: #eef5ff;
+      border-radius: 12px;
+      padding: 16px;
+      margin: 16px 0;
+      font-size: 0.95rem;
+    }
+    .description b { color: var(--md-sys-color-primary); }
+    .input-group { margin-top: 20px; }
+    .input-group label {
+      font-weight: 600;
+      font-size: 1.1rem;
+      display: block;
+      margin-bottom: 12px;
+    }
+    input[type="file"] {
+      width: 100%;
+      padding: 12px;
+      border: 1px solid var(--md-sys-color-outline);
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    input[type="file"]::file-selector-button {
+      background: var(--md-sys-color-primary); color: white; border: none; padding: 8px 12px;
+      border-radius: 6px; margin-right: 12px; cursor: pointer; transition: background-color 0.2s;
+    }
+    input[type="file"]::file-selector-button:hover { background: #095bb4; }
+    md-outlined-text-field { width: 100%; }
+    md-filled-button {
+      width: 100%; --md-filled-button-container-height: 50px; margin-top: 24px;
+    }
+    
+    #progress-container {
+      margin-top: 24px; background: #f8f9fa; padding: 16px; border-radius: 12px; display: none;
+    }
+    .step {
+      display: flex; align-items: center; gap: 12px; padding: 8px 0; transition: all 0.3s ease;
+    }
+    .step .icon { width: 24px; height: 24px; display: grid; place-items: center; font-weight: bold; }
+    .step .text { font-weight: 500; color: #5f6368; }
+    .step.active .text { color: var(--md-sys-color-primary); font-weight: 600; }
+    .step.done .text { color: #3c4043; }
+    .step.error .text { color: var(--error-color); font-weight: 600; }
+    .step md-circular-progress { --md-circular-progress-size: 20px; visibility: hidden; }
+    .step.active md-circular-progress { visibility: visible; }
+    .step .icon-symbol { font-family: 'Material Symbols Outlined'; font-size: 24px; font-variation-settings: 'FILL' 1; }
+    .step.done .icon-symbol { color: var(--success-color); }
+    .step.error .icon-symbol { color: var(--error-color); }
+    
+    #log {
+      white-space: pre-wrap; font-family: monospace; font-size: 0.8rem; background: #1e1e1e; color: #00dd00;
+      padding: 12px; border-radius: 8px; margin-top: 12px; max-height: 200px; overflow-y: auto; display: none;
+    }
+
+    /* YENİ: UYARI MESAJI STİLİ */
+    #security-warning {
+      display: none; background-color: #fff3e0; border: 2px solid var(--warning-color); color: #5c3c00;
+      padding: 16px; border-radius: 12px; margin-bottom: 20px;
+    }
+    #security-warning .material-symbols-outlined {
+        font-size: 32px;
+        vertical-align: middle;
+        margin-right: 8px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- YENİ: GÜVENLİK UYARISI MESAJI -->
+  <div id="security-warning">
+      <span class="material-symbols-outlined">warning</span>
+      <b>Güvenlik Uyarısı:</b> Bu sayfa doğrudan bir dosya olarak açıldı. Tarayıcı güvenlik kuralları nedeniyle uygulamanın çalışması için bir "yerel sunucu" (local server) üzerinden açılması gerekmektedir.
+  </div>
+
+  <div class="card" id="app-card">
+    <h1>
+      <span class="material-symbols-outlined">movie_filter</span>
+      <span>MP4 Birleştirici</span>
+    </h1>
+    <p class="description">
+      <b>Nasıl Çalışır?</b> Önce "intro" videosunu, sonra da ana videoyu seçin. Sistem, intro'yu ana videonun başına ekleyerek tek bir dosya oluşturur ve indirmenizi sağlar.
+    </p>
+
+    <div class="input-group">
+      <label>1️⃣ Intro Videosu (Başa Eklenecek)</label>
+      <input id="introFile" type="file" accept="video/mp4">
+    </div>
+
+    <div class="input-group">
+      <label>2️⃣ Ana Video (MP4 Dosyası veya Link)</label>
+      <input id="mainFile" type="file" accept="video/mp4">
+      <div style="text-align: center; margin: 12px 0;">veya</div>
+      <md-outlined-text-field id="videoUrl" label="Herkese açık MP4 linki yapıştırın"></md-outlined-text-field>
+    </div>
+
+    <md-filled-button id="runBtn" trailing-icon="rocket_launch">Birleştir ve İndir</md-filled-button>
+    
+    <div id="progress-container">
+      <div class="step" data-step="0"><div class="icon"><md-circular-progress></md-circular-progress><span class="icon-symbol"></span></div><span class="text">FFmpeg motoru hazırlanıyor</span></div>
+      <div class="step" data-step="1"><div class="icon"><md-circular-progress></md-circular-progress><span class="icon-symbol"></span></div><span class="text">Intro videosu belleğe alınıyor</span></div>
+      <div class="step" data-step="2"><div class="icon"><md-circular-progress></md-circular-progress><span class="icon-symbol"></span></div><span class="text">Ana video belleğe alınıyor</span></div>
+      <div class="step" data-step="3"><div class="icon"><md-circular-progress></md-circular-progress><span class="icon-symbol"></span></div><span class="text">Videolar birleştiriliyor</span></div>
+      <div class="step" data-step="4"><div class="icon"><md-circular-progress></md-circular-progress><span class="icon-symbol"></span></div><span class="text">İndirme için hazırlanıyor</span></div>
+    </div>
+    
+    <div id="log"></div>
+  </div>
+
+  <script>
+    // YENİ: Sayfa yüklendiğinde protokol kontrolü yap
+    if (window.location.protocol === 'file:') {
+      document.getElementById('security-warning').style.display = 'block';
+      document.getElementById('app-card').style.opacity = '0.5';
+      document.getElementById('app-card').style.pointerEvents = 'none';
+    }
+  </script>
+
+  <script type="module">
+    // Bu kısım `file://` protokolü ile çalışmayacaktır.
+    if (window.location.protocol !== 'file:') {
+        import('https://unpkg.com/@ffmpeg/ffmpeg@0.12.6/dist/esm/ffmpeg.js').then(({ FFmpeg }) => {
+        import('https://unpkg.com/@ffmpeg/util@0.12.1/dist/esm/index.js').then(({ fetchFile, toBlobURL }) => {
+            
+            const introInput = document.getElementById('introFile');
+            const mainInput = document.getElementById('mainFile');
+            const urlInput = document.getElementById('videoUrl');
+            const runBtn = document.getElementById('runBtn');
+            const logEl = document.getElementById('log');
+            const progressContainer = document.getElementById('progress-container');
+            const steps = progressContainer.querySelectorAll('.step');
+
+            let ffmpegInstance = null;
+
+            function updateStep(index, status, message = null) {
+              const step = steps[index];
+              if (!step) return;
+              step.classList.remove('active', 'done', 'error', 'pending');
+              step.classList.add(status);
+              const iconSymbol = step.querySelector('.icon-symbol');
+              if (status === 'done') iconSymbol.textContent = 'check_circle';
+              else if (status === 'error') iconSymbol.textContent = 'error';
+              else iconSymbol.textContent = '';
+              if (message) step.querySelector('.text').textContent = message;
+            }
+
+            async function loadFFmpeg() {
+              if (ffmpegInstance) return;
+              updateStep(0, 'active');
+              const ffmpeg = new FFmpeg();
+              ffmpeg.on('log', ({ message }) => {
+                logEl.textContent += message + "\n";
+                logEl.scrollTop = logEl.scrollHeight;
+              });
+              const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm';
+              await ffmpeg.load({
+                coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+                wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+              });
+              ffmpegInstance = ffmpeg;
+              updateStep(0, 'done');
+            }
+
+            runBtn.onclick = async () => {
+              if (!introInput.files[0]) return alert("Lütfen bir intro videosu seçin.");
+              if (!mainInput.files[0] && !urlInput.value.trim()) return alert("Lütfen bir ana video dosyası seçin veya linkini girin.");
+
+              runBtn.disabled = true;
+              logEl.textContent = ""; logEl.style.display = 'block';
+              progressContainer.style.display = 'block';
+              steps.forEach((s, i) => {
+                const originalText = s.querySelector('.text').textContent.replace(/ (belleğe|indiriliyor|birleştiriliyor).*/, '');
+                updateStep(i, 'pending', originalText);
+              });
+
+              let activeStep = 0;
+              try {
+                await loadFFmpeg();
+
+                activeStep = 1;
+                updateStep(activeStep, 'active');
+                await ffmpegInstance.writeFile("intro.mp4", await fetchFile(introInput.files[0]));
+                updateStep(activeStep, 'done');
+
+                activeStep = 2;
+                const mainFile = mainInput.files[0];
+                const videoUrl = urlInput.value.trim();
+                const taskText = mainFile ? 'Ana video belleğe alınıyor' : 'Ana video linkten indiriliyor';
+                updateStep(activeStep, 'active', taskText);
+                const mainVideoData = mainFile ? await fetchFile(mainFile) : await fetchFile(videoUrl);
+                await ffmpegInstance.writeFile("main.mp4", mainVideoData);
+                updateStep(activeStep, 'done', taskText.replace(/yor$/, 'ldu'));
+
+                activeStep = 3;
+                updateStep(activeStep, 'active');
+                await ffmpegInstance.writeFile("list.txt", "file 'intro.mp4'\nfile 'main.mp4'");
+                await ffmpegInstance.exec(["-f", "concat", "-safe", "0", "-i", "list.txt", "-c", "copy", "output.mp4"]);
+                updateStep(activeStep, 'done');
+
+                activeStep = 4;
+                updateStep(activeStep, 'active', 'Video indiriliyor...');
+                const outputData = await ffmpegInstance.readFile("output.mp4");
+                const blob = new Blob([outputData.buffer], { type: "video/mp4" });
+                const a = document.createElement("a");
+                a.href = URL.createObjectURL(blob); a.download = "birlesik_video.mp4";
+                document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                updateStep(activeStep, 'done', 'Video başarıyla indirildi!');
+
+              } catch (err) {
+                console.error(err);
+                updateStep(activeStep, 'error', `Hata: ${err.message.slice(0, 50)}...`);
+                alert("Bir hata oluştu. Teknik detaylar için konsolu (F12) ve log kayıtlarını kontrol edin.");
+              } finally {
+                runBtn.disabled = false;
+              }
+            };
+        });
+        });
+    }
+  </script>
+</body>
+</html>
